@@ -1,0 +1,22 @@
+{
+  "sensorData": {
+    "-Nsample001": {
+      "sound": 45,
+      "light": 220,
+      "temperature": 28,
+      "ts": 1736470000000
+    },
+    "-Nsample002": {
+      "sound": 47,
+      "light": 210,
+      "temperature": 27,
+      "ts": 1736473600000
+    },
+    "-Nsample003": {
+      "sound": 49,
+      "light": 200,
+      "temperature": 26,
+      "ts": 1736477200000
+    }
+  }
+}

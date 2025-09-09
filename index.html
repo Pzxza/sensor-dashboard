@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Realtime Sensor Dashboard — Firebase RTDB (Sliding)</title>
+
+  <!-- Fonts & Chart.js -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root{--bg:#0b0f19;--card:#121829;--ink:#e6eaf5;--muted:#9aa4bf}
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#090d16 0%,#0b1020 100%);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+    .h1{font-size:28px;font-weight:800;letter-spacing:.2px}
+    .sub{font-size:13px;color:var(--muted)}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+    .card{grid-column:span 12;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+    .card.third{grid-column:span 4}
+    .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .kpi{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:12px}
+    .kpi .label{font-size:12px;color:var(--muted)}
+    .kpi .value{font-size:26px;font-weight:700;margin-top:6px}
+    .legend{font-size:12px;color:var(--muted)}
+    .row{display:flex;align-items:center;gap:10px}
+    .pill{display:inline-flex;align-items:center;gap:6px;background:rgba(75,139,255,.12);color:#cfe0ff;border:1px solid rgba(75,139,255,.3);border-radius:999px;padding:6px 10px;font-size:12px}
+    .btn{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);color:#e6eaf5;border-radius:999px;padding:6px 10px;font-size:12px;cursor:pointer}
+    .btn:hover{background:rgba(255,255,255,.12)}
+    @media (max-width:920px){.card.third{grid-column:span 12}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <div class="h1">Realtime Sensor Dashboard</div>
+        <div class="sub">(RTDB) Sound (dB) • Light (lux) • Temperature (°C) • Timestamp — Sliding Window</div>
+      </div>
+      <div class="row">
+        <button id="demo-toggle" class="btn" title="ส่งข้อมูลจำลองเข้า RTDB">Start Demo Stream</button>
+        <span class="pill" id="conn-pill">Connecting…</span>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <div class="kpis">
+          <div class="kpi"><div class="label">เสียง (dB) ล่าสุด</div><div class="value" id="kpi-sound">—</div></div>
+          <div class="kpi"><div class="label">แสง (lux) ล่าสุด</div><div class="value" id="kpi-light">—</div></div>
+          <div class="kpi"><div class="label">อุณหภูมิ (°C) ล่าสุด</div><div class="value" id="kpi-temp">—</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="legend">กราฟรวม (หน้าต่างเลื่อน เก็บล่าสุด MAX_POINTS จุด)</div>
+        <canvas id="chartAll" height="100"></canvas>
+      </div>
+
+      <div class="card third"><div class="legend">เสียง (dB)</div><canvas id="chartSound" height="130"></canvas></div>
+      <div class="card third"><div class="legend">แสง (lux)</div><canvas id="chartLight" height="130"></canvas></div>
+      <div class="card third"><div class="legend">อุณหภูมิ (°C)</div><canvas id="chartTemp" height="130"></canvas></div>
+    </section>
+  </div>
+
+  <script type="module">
+    // Firebase SDK (Modular) for RTDB
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { 
+      getDatabase, ref, query, orderByChild, limitToLast, onChildAdded,
+      push, set
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    // ===== ใส่ config โปรเจกต์ของคุณ =====
+    const firebaseConfig = {
+      apiKey: "AIzaSyApmnCH2DTpx9qCY4Q0xq1EXKn6u4IHJyc",
+      authDomain: "sensor-dashboard-25f3b.firebaseapp.com",
+      databaseURL: "https://sensor-dashboard-25f3b-default-rtdb.firebaseio.com",
+      projectId: "sensor-dashboard-25f3b",
+      storageBucket: "sensor-dashboard-25f3b.appspot.com",
+      messagingSenderId: "459021550534",
+      appId: "1:459021550534:web:7eedbb650bbe2053cce8c7",
+      measurementId: "G-X2GRP3RC7M"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const rtdb = getDatabase(app);
+
+    // ===== Chart state =====
+    const MAX_POINTS = 80; // ลดจำนวนจุดเพื่อความอ่านง่าย (ปรับได้)
+    const tz = 'Asia/Bangkok';
+    const labels = [], soundArr = [], lightArr = [], tempArr = [];
+
+    function formatLabel(date){
+      // ใช้ HH:MM ให้ไม่ถี่เกิน
+      return date.toLocaleTimeString('th-TH', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    }
+
+    // ===== Build Charts =====
+    const ctxAll   = document.getElementById('chartAll');
+    const ctxSound = document.getElementById('chartSound');
+    const ctxLight = document.getElementById('chartLight');
+    const ctxTemp  = document.getElementById('chartTemp');
+
+    const commonOptions = {
+      responsive:true,
+      animation:{ duration: 250 },        // เลื่อนลื่นๆ
+      normalized:true,
+      spanGaps:true,
+      elements:{
+        point:{ radius:0 },               // ซ่อนจุด ลดความรก (ปรับเป็น 1.5 ถ้าอยากเห็นจุดเล็กๆ)
+        line:{ borderWidth:2, tension:.25, capBezierPoints:true }
+      },
+      scales:{
+        x:{ ticks:{ color:'#9aa4bf', maxRotation:0, autoSkip:true, maxTicksLimit:10 }},
+        y:{ ticks:{ color:'#9aa4bf' }, grid:{ color:'rgba(255,255,255,.06)' } }
+      },
+      plugins:{
+        legend:{ labels:{ color:'#e6eaf5' } },
+        tooltip:{ mode:'index', intersect:false, position:'nearest' },
+        decimation:{ enabled:true, algorithm:'lttb' }
+      }
+    };
+
+    const chartAll = new Chart(ctxAll, { type:'line', data:{ labels, datasets:[
+      { label:'เสียง (dB)', data:soundArr },
+      { label:'แสง (lux)', data:lightArr },
+      { label:'อุณหภูมิ (°C)', data:tempArr }
+    ] }, options: commonOptions });
+
+    const chartSound = new Chart(ctxSound,{ type:'line', data:{ labels, datasets:[{ label:'dB', data:soundArr }]}, options: commonOptions});
+    const chartLight = new Chart(ctxLight,{ type:'line', data:{ labels, datasets:[{ label:'lux', data:lightArr }]}, options: commonOptions});
+    const chartTemp  = new Chart(ctxTemp, { type:'line', data:{ labels, datasets:[{ label:'°C', data:tempArr }]}, options: commonOptions});
+
+    const kpiSound = document.getElementById('kpi-sound');
+    const kpiLight = document.getElementById('kpi-light');
+    const kpiTemp  = document.getElementById('kpi-temp');
+    const connPill = document.getElementById('conn-pill');
+
+    function updateKPIs(){
+      const i = labels.length-1;
+      kpiSound.textContent = soundArr[i] ?? '—';
+      kpiLight.textContent = lightArr[i] ?? '—';
+      kpiTemp.textContent  = tempArr[i]  ?? '—';
+    }
+    function redraw(){ chartAll.update(); chartSound.update(); chartLight.update(); chartTemp.update(); updateKPIs(); }
+
+    // ===== Realtime: listen ทีละ record แล้ว "เลื่อนหน้าต่าง" =====
+    const sensorRef = ref(rtdb, 'sensorData');
+    // โหลดย้อนหลังชุดล่าสุด และรับต่อเนื่อง
+    const q = query(sensorRef, orderByChild('ts'), limitToLast(MAX_POINTS));
+    connPill.textContent = 'Live';
+
+    onChildAdded(q, (snap) => {
+      const d = snap.val();
+      if (!d || typeof d.ts !== 'number') return;
+
+      labels.push(formatLabel(new Date(d.ts)));
+      soundArr.push(Number(d.sound ?? 0));
+      lightArr.push(Number(d.light ?? 0));
+      tempArr.push(Number(d.temperature ?? 0));
+
+      // เลื่อนออกถ้าเกิน MAX_POINTS
+      if (labels.length > MAX_POINTS) {
+        labels.shift();
+        soundArr.shift();
+        lightArr.shift();
+        tempArr.shift();
+      }
+      redraw();
+    }, (err) => {
+      connPill.textContent = 'Error';
+      console.error(err);
+    });
+
+    // ===== Demo sender (กดปุ่มเพื่อส่งข้อมูลจำลองเข้า RTDB) =====
+    let timer = null;
+    const btn = document.getElementById('demo-toggle');
+
+    async function sendOne(){
+      const id = push(sensorRef);
+      await set(id, {
+        sound: +(40 + Math.random()*20).toFixed(1),
+        light: Math.floor(100 + Math.random()*500),
+        temperature: +(24 + Math.random()*8).toFixed(1),
+        ts: Date.now()
+      });
+      // console.log('sent fake sensor data');
+    }
+    function startDemo(){
+      if(timer) return;
+      timer = setInterval(sendOne, 3000);
+      btn.textContent = 'Stop Demo Stream';
+    }
+    function stopDemo(){
+      if(!timer) return;
+      clearInterval(timer); timer = null;
+      btn.textContent = 'Start Demo Stream';
+    }
+    btn.addEventListener('click', ()=> timer ? stopDemo() : startDemo());
+  </script>
+</body>
+</html>
